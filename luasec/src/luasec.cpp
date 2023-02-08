@@ -17,19 +17,20 @@
 static void LuaInit(lua_State* L)
 {
     int top = lua_gettop(L);
-
+    printf("%d\n", lua_gettop(L));
     luaopen_ssl_core(L);
-    //printf("%d\n", lua_gettop(L));
+    printf("%d\n", lua_gettop(L));
     lua_pop(L, 4);
 
     luaopen_ssl_context(L);
-    //printf("%d\n", lua_gettop(L));
+    printf("%d\n", lua_gettop(L));
     lua_pop(L, 5);
 
     luaopen_ssl_x509(L);
-    //printf("%d\n", lua_gettop(L));
-    lua_pop(L, 3);
-
+    printf("%d\n", lua_gettop(L));
+    // lua_pop(L, 3);
+    printf("%d\n", lua_gettop(L));
+    
     assert(top == lua_gettop(L));
 }
 

@@ -1,9 +1,9 @@
 /*--------------------------------------------------------------------------
- * LuaSec 0.6
+ * LuaSec 0.7.2
  *
- * Copyright (C) 2014-2016 Kim Alvefur, Paul Aurich, Tobias Markmann, 
+ * Copyright (C) 2014-2019 Kim Alvefur, Paul Aurich, Tobias Markmann, 
  *                         Matthew Wild.
- * Copyright (C) 2006-2016 Bruno Silvestre.
+ * Copyright (C) 2006-2019 Bruno Silvestre.
  *
  *--------------------------------------------------------------------------*/
 
@@ -11,22 +11,24 @@
 
 #if defined(WIN32)
 #include <WinSock2.h>
-//#include <Windows.h>
+//#include <windows.h>
 #endif
 
-#include "openssl/ssl.h"
-#include "openssl/err.h"
-#include "openssl/x509.h"
-#include "openssl/x509v3.h"
+#include <openssl/ssl.h>
+#include <openssl/err.h>
+#include <openssl/x509.h>
+#include <openssl/x509v3.h>
 
 //#include <lua.h>
+//#include <lauxlib.h>
+#include <dmsdk/sdk.h>//#include <lua.h>
 //#include <lauxlib.h>
 #include <dmsdk/sdk.h>
 
 #include "context.h"
 #include "options.h"
 
-#ifndef OPENSSL_NO_ECDH
+#ifndef OPENSSL_NO_EC
 #include "openssl/ec.h"
 #include "ec.h"
 #endif
@@ -35,28 +37,6 @@
 typedef const SSL_METHOD LSEC_SSL_METHOD;
 #else
 typedef       SSL_METHOD LSEC_SSL_METHOD;
-#endif
-
-/*-- Compat - Lua 5.1 --------------------------------------------------------*/
-
-#if (LUA_VERSION_NUM == 501)
-
-#define luaL_testudata(L, ud, tname)  testudata(L, ud, tname)
-
-static void *testudata (lua_State *L, int ud, const char *tname) {
-  void *p = lua_touserdata(L, ud);
-  if (p != NULL) {  /* value is a userdata? */
-    if (lua_getmetatable(L, ud)) {  /* does it have a metatable? */
-      luaL_getmetatable(L, tname);  /* get correct metatable */
-      if (!lua_rawequal(L, -1, -2))  /* not the same? */
-        p = NULL;  /* value is a userdata with wrong metatable */
-      lua_pop(L, 2);  /* remove both metatables */
-      return p;
-    }
-  }
-  return NULL;  /* value is not a userdata with a metatable */
-}
-
 #endif
 
 /*--------------------------- Auxiliary Functions ----------------------------*/
@@ -79,8 +59,8 @@ static p_context testctx(lua_State *L, int idx)
  */
 static int set_option_flag(const char *opt, unsigned long *flag)
 {
-  ssl_option_t *p;
-  for (p = ssl_options; p->name; p++) {
+  lsec_ssl_option_t *p;
+  for (p = lsec_get_ssl_options(); p->name; p++) {
     if (!strcmp(opt, p->name)) {
       *flag |= p->code;
       return 1;
@@ -302,18 +282,6 @@ static int verify_cb(int preverify_ok, X509_STORE_CTX *x509_ctx)
   return (verify & LSEC_VERIFY_CONTINUE ? 1 : preverify_ok);
 }
 
-#ifndef OPENSSL_NO_ECDH
-static EC_KEY *find_ec_key(const char *str)
-{
-  p_ec ptr;
-  for (ptr = curves; ptr->name; ptr++) {
-    if (!strcmp(str, ptr->name))
-      return EC_KEY_new_by_curve_name(ptr->nid);
-  }
-  return NULL;
-}
-#endif
-
 /*------------------------------ Lua Functions -------------------------------*/
 
 /**
@@ -366,120 +334,15 @@ static int load_locations(lua_State *L)
 {
   SSL_CTX *ctx = lsec_checkcontext(L, 1);
   const char *cafile = luaL_optstring(L, 2, NULL);
-  const char *capath = luaL_optstring(L, 3, NULL);      // for now it's ignored
-  BIO *cbio = BIO_new_mem_buf((void*)cafile, -1);
-  X509_STORE *store;
-  X509 *cert = NULL;
-  
-  if (cbio == NULL) {
-    lua_pushboolean(L, 0);
-    lua_pushfstring(L, "error loading CA locations (%s)", ERR_reason_error_string(ERR_get_error()));
-    
-    return 2;
-  }
-    
-  PEM_read_bio_X509(cbio, &cert, 0, NULL);
-  
-  if (cert == NULL) {
-    lua_pushboolean(L, 0);
-    lua_pushfstring(L, "error loading CA locations (%s)", ERR_reason_error_string(ERR_get_error()));
-  
-    BIO_free(cbio);
-      
-    return 2;
-  } else {
-    BIO_free(cbio);
-  }
-    
-  store = SSL_CTX_get_cert_store(ctx);
-  if (store == NULL || X509_STORE_add_cert(store, cert) == 0) {
-  //if (SSL_CTX_load_verify_locations(ctx, cafile, capath) != 1) {
+  const char *capath = luaL_optstring(L, 3, NULL);
+  if (SSL_CTX_load_verify_locations(ctx, cafile, capath) != 1) {
     lua_pushboolean(L, 0);
     lua_pushfstring(L, "error loading CA locations (%s)",
       ERR_reason_error_string(ERR_get_error()));
-    
-    X509_free(cert);
-      
     return 2;
-  } else {
-    X509_free(cert);
   }
-    
   lua_pushboolean(L, 1);
-  
   return 1;
-}
-
-static int use_certificate_chain_file(SSL_CTX *ctx, BIO *cbio)
-{
-    int ret = 0;
-    X509 *x = NULL;
-    pem_password_cb *passwd_callback;
-    void *passwd_callback_userdata;
-
-    ERR_clear_error();          /* clear error stack for
-                                 * SSL_CTX_use_certificate() */
-
-    passwd_callback = SSL_CTX_get_default_passwd_cb(ctx);
-    passwd_callback_userdata = SSL_CTX_get_default_passwd_cb_userdata(ctx);
-
-    x = PEM_read_bio_X509_AUX(cbio, NULL, passwd_callback,
-                              passwd_callback_userdata);
-    if (x == NULL) {
-        SSLerr(SSL_F_USE_CERTIFICATE_CHAIN_FILE, ERR_R_PEM_LIB);
-        goto end;
-    }
-
-    ret = SSL_CTX_use_certificate(ctx, x);
-  
-    if (ERR_peek_error() != 0)
-        ret = 0;                /* Key/certificate mismatch doesn't imply
-                                 * ret==0 ... */
-    if (ret) {
-        /*
-         * If we could set up our certificate, now proceed to the CA
-         * certificates.
-         */
-        X509 *ca;
-        int r;
-        unsigned long err;
-
-        r = SSL_CTX_clear_chain_certs(ctx);
-       
-        if (r == 0) {
-            ret = 0;
-            goto end;
-        }
-
-        while ((ca = PEM_read_bio_X509(cbio, NULL, passwd_callback,
-                                       passwd_callback_userdata))
-               != NULL) {
-            r = SSL_CTX_add0_chain_cert(ctx, ca);
-        
-            /*
-             * Note that we must not free ca if it was successfully added to
-             * the chain (while we must free the main certificate, since its
-             * reference count is increased by SSL_CTX_use_certificate).
-             */
-            if (!r) {
-                X509_free(ca);
-                ret = 0;
-                goto end;
-            }
-        }
-        /* When the while loop ends, it's usually just EOF. */
-        err = ERR_peek_last_error();
-        if (ERR_GET_LIB(err) == ERR_LIB_PEM
-            && ERR_GET_REASON(err) == PEM_R_NO_START_LINE)
-            ERR_clear_error();
-        else
-            ret = 0;            /* some real error */
-    }
-
- end:
-    X509_free(x);
-    BIO_free(cbio);
-    return (ret);
 }
 
 /**
@@ -489,10 +352,7 @@ static int load_cert(lua_State *L)
 {
   SSL_CTX *ctx = lsec_checkcontext(L, 1);
   const char *filename = luaL_checkstring(L, 2);
-  BIO *cbio = BIO_new_mem_buf((void*)filename, -1);
-  
-  if (cbio == NULL || use_certificate_chain_file(ctx, cbio) != 1) {
-  //if (SSL_CTX_use_certificate_chain_file(ctx, filename) != 1) {  	
+  if (SSL_CTX_use_certificate_chain_file(ctx, filename) != 1) {
     lua_pushboolean(L, 0);
     lua_pushfstring(L, "error loading certificate (%s)",
       ERR_reason_error_string(ERR_get_error()));
@@ -509,10 +369,7 @@ static int load_key(lua_State *L)
 {
   int ret = 1;
   SSL_CTX *ctx = lsec_checkcontext(L, 1);
-  BIO *kbio;
-  EVP_PKEY *pkey = NULL;
   const char *filename = luaL_checkstring(L, 2);
- 
   switch (lua_type(L, 3)) {
   case LUA_TSTRING:
   case LUA_TFUNCTION:
@@ -520,10 +377,7 @@ static int load_key(lua_State *L)
     SSL_CTX_set_default_passwd_cb_userdata(ctx, L);
     /* fallback */
   case LUA_TNIL: 
-  	kbio = BIO_new_mem_buf((void*)filename, -1);
-  	pkey = PEM_read_bio_PrivateKey(kbio, NULL, SSL_CTX_get_default_passwd_cb(ctx), SSL_CTX_get_default_passwd_cb_userdata(ctx));
-  	if (pkey && SSL_CTX_use_PrivateKey(ctx, pkey) == 1)
-    //if (SSL_CTX_use_PrivateKey_file(ctx, filename, SSL_FILETYPE_PEM) == 1)
+    if (SSL_CTX_use_PrivateKey_file(ctx, filename, SSL_FILETYPE_PEM) == 1)
       lua_pushboolean(L, 1);
     else {
       ret = 2;
@@ -531,10 +385,6 @@ static int load_key(lua_State *L)
       lua_pushfstring(L, "error loading private key (%s)",
         ERR_reason_error_string(ERR_get_error()));
     }
-    
-    EVP_PKEY_free(pkey);
-    BIO_free(kbio);
-    
     SSL_CTX_set_default_passwd_cb(ctx, NULL);
     SSL_CTX_set_default_passwd_cb_userdata(ctx, NULL);
     break;
@@ -678,17 +528,10 @@ static int set_dhparam(lua_State *L)
   return 0;
 }
 
+#if !defined(OPENSSL_NO_EC)
 /**
  * Set elliptic curve.
  */
-#ifdef OPENSSL_NO_ECDH
-static int set_curve(lua_State *L)
-{
-  lua_pushboolean(L, 0);
-  lua_pushstring(L, "OpenSSL does not support ECDH");
-  return 2;
-}
-#else
 static int set_curve(lua_State *L)
 {
   long ret;
@@ -697,26 +540,11 @@ static int set_curve(lua_State *L)
 
   SSL_CTX_set_options(ctx, SSL_OP_SINGLE_ECDH_USE);
 
-#if defined(SSL_CTRL_SET_ECDH_AUTO) || defined(SSL_CTRL_SET_CURVES_LIST) || defined(SSL_CTX_set1_curves_list)
-  if (SSL_CTX_set1_curves_list(ctx, str) != 1) {
-    lua_pushboolean(L, 0);
-    lua_pushfstring(L, "unknown elliptic curve in \"%s\"", str);
-    return 2;
-  }
-
-#ifdef SSL_CTRL_SET_ECDH_AUTO
-  SSL_CTX_set_ecdh_auto(ctx, 1);
-#endif
-
-  lua_pushboolean(L, 1);
-  return 1;
-
-#else /* !defined(SSL_CTRL_SET_CURVES_LIST) */
-  EC_KEY *key = find_ec_key(str);
+  EC_KEY *key = lsec_find_ec_key(L, str);
 
   if (!key) {
     lua_pushboolean(L, 0);
-    lua_pushfstring(L, "elliptic curve %s not supported", str);
+    lua_pushfstring(L, "elliptic curve '%s' not supported", str);
     return 2;
   }
 
@@ -730,9 +558,35 @@ static int set_curve(lua_State *L)
       ERR_reason_error_string(ERR_get_error()));
     return 2;
   }
+
   lua_pushboolean(L, 1);
   return 1;
-#endif /* defined(SSL_CTRL_SET_CURVES_LIST) */
+}
+#endif
+
+#if !defined(OPENSSL_NO_EC) && (defined(SSL_CTRL_SET_CURVES_LIST) || defined(SSL_CTX_set1_curves_list) || defined(SSL_CTRL_SET_ECDH_AUTO))
+/**
+ * Set elliptic curves list.
+ */
+static int set_curves_list(lua_State *L)
+{
+  SSL_CTX *ctx = lsec_checkcontext(L, 1);
+  const char *str = luaL_checkstring(L, 2);
+
+  SSL_CTX_set_options(ctx, SSL_OP_SINGLE_ECDH_USE);
+
+  if (SSL_CTX_set1_curves_list(ctx, str) != 1) {
+    lua_pushboolean(L, 0);
+    lua_pushfstring(L, "unknown elliptic curve in \"%s\"", str);
+    return 2;
+  }
+
+#ifdef SSL_CTRL_SET_ECDH_AUTO
+  SSL_CTX_set_ecdh_auto(ctx, 1);
+#endif
+
+  lua_pushboolean(L, 1);
+  return 1;
 }
 #endif
 
@@ -748,10 +602,18 @@ static luaL_Reg funcs[] = {
   {"setcipher",    set_cipher},
   {"setdepth",     set_depth},
   {"setdhparam",   set_dhparam},
-  {"setcurve",     set_curve},
   {"setverify",    set_verify},
   {"setoptions",   set_options},
   {"setmode",      set_mode},
+
+#if !defined(OPENSSL_NO_EC)
+  {"setcurve",     set_curve},
+#endif
+
+#if !defined(OPENSSL_NO_EC) && (defined(SSL_CTRL_SET_CURVES_LIST) || defined(SSL_CTX_set1_curves_list) || defined(SSL_CTRL_SET_ECDH_AUTO))
+  {"setcurveslist", set_curves_list},
+#endif
+
   {NULL, NULL}
 };
 
@@ -893,6 +755,25 @@ int lsec_getmode(lua_State *L, int idx)
   return ctx->mode;
 }
 
+/*-- Compat - Lua 5.1 --*/
+#if (LUA_VERSION_NUM == 501)
+
+void *lsec_testudata (lua_State *L, int ud, const char *tname) {
+  void *p = lua_touserdata(L, ud);
+  if (p != NULL) {  /* value is a userdata? */
+    if (lua_getmetatable(L, ud)) {  /* does it have a metatable? */
+      luaL_getmetatable(L, tname);  /* get correct metatable */
+      if (!lua_rawequal(L, -1, -2))  /* not the same? */
+        p = NULL;  /* value is a userdata with wrong metatable */
+      lua_pop(L, 2);  /* remove both metatables */
+      return p;
+    }
+  }
+  return NULL;  /* value is not a userdata with a metatable */
+}
+
+#endif
+
 /*------------------------------ Initialization ------------------------------*/
 
 /**
@@ -903,14 +784,16 @@ LSEC_API int luaopen_ssl_context(lua_State *L)
   luaL_newmetatable(L, "SSL:DH:Registry");      /* Keep all DH callbacks */
   luaL_newmetatable(L, "SSL:Verify:Registry");  /* Keep all verify flags */
   luaL_newmetatable(L, "SSL:Context");
-  setfuncs(L, NULL, meta);
+  setfuncs(L, meta);
 
   /* Create __index metamethods for context */
-  luaL_newlib(L, NULL, meta_index);
+  luaL_newlib(L, meta_index);
   lua_setfield(L, -2, "__index");
 
+  lsec_load_curves(L);
+
   /* Return the module */
-  luaL_newlib(L, MODULE_NAME".ssl.context", funcs);
+  luaL_newlib(L, funcs);
 
   return 1;
 }

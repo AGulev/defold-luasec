@@ -1,7 +1,7 @@
 /*--------------------------------------------------------------------------
- * LuaSec 0.6
+ * LuaSec 0.7.2
  *
- * Copyright (C) 2014-2016 Kim Alvefur, Paul Aurich, Tobias Markmann
+ * Copyright (C) 2014-2019 Kim Alvefur, Paul Aurich, Tobias Markmann
  *                         Matthew Wild, Bruno Silvestre.
  *
  *--------------------------------------------------------------------------*/
@@ -13,7 +13,7 @@
 //#include <lua.h>
 #include <dmsdk/sdk.h>
 
-#include "config.h"
+#include "compat.h"
 
 /* We do not support UniversalString nor BMPString as ASN.1 String types */
 enum { LSEC_AI5_STRING, LSEC_UTF8_STRING };

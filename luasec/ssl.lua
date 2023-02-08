@@ -1,12 +1,14 @@
 ------------------------------------------------------------------------------
--- LuaSec 0.6
--- Copyright (C) 2006-2016 Bruno Silvestre
+-- LuaSec 0.7.2
+--
+-- Copyright (C) 2006-2019 Bruno Silvestre
 --
 ------------------------------------------------------------------------------
 
 local core    = luasec.ssl.core
 local context = luasec.ssl.context
 local x509    = luasec.ssl.x509
+-- local config  = require("ssl.config")
 
 local unpack  = table.unpack or unpack
 
@@ -92,11 +94,19 @@ local function newcontext(cfg)
       end
       context.setdhparam(ctx, cfg.dhparam)
    end
-   -- Set elliptic curve
-   if cfg.curve then
-      succ, msg = context.setcurve(ctx, cfg.curve)
-      if not succ then return nil, msg end
+   
+   -- Set elliptic curves
+   if (not config.algorithms.ec) and (cfg.curve or cfg.curveslist) then
+     return false, "elliptic curves not supported"
    end
+   if config.capabilities.curves_list and cfg.curveslist then
+     succ, msg = context.setcurveslist(ctx, cfg.curveslist)
+     if not succ then return nil, msg end
+   elseif cfg.curve then
+     succ, msg = context.setcurve(ctx, cfg.curve)
+     if not succ then return nil, msg end
+   end
+
    -- Set extra verification options
    if cfg.verifyext and ctx.setverifyext then
       succ, msg = optexec(ctx.setverifyext, cfg.verifyext, ctx)
@@ -120,7 +130,7 @@ local function wrap(sock, cfg)
    local s, msg = core.create(ctx)
    if s then
       core.setfd(s, sock:getfd())
-      sock:setfd(-1)				-- core.SOCKET_INVALID
+      sock:setfd(core.SOCKET_INVALID)
       registry[s] = ctx
       return s
    end
@@ -162,31 +172,6 @@ end
 --
 -- Set method for SSL connections.
 --
---[[local copyright = core.copyright()
-print(copyright)
-
-local seen={}
-
-    function dump(t,i)
-        seen[t]=true
-        local s={}
-        local n=0
-        for k in pairs(t) do
-            n=n+1 s[n]=k
-        end
-        table.sort(s)
-        for k,v in ipairs(s) do
-            print(i,v)
-            v=t[v]
-            if type(v)=="table" and not seen[v] then
-                dump(v,i.."\t")
-            end
-        end
-    end
-
-    dump(luasec,"")--]]
-
-		
 core.setmethod("info", info)
 
 --------------------------------------------------------------------------------
@@ -194,8 +179,9 @@ core.setmethod("info", info)
 --
 
 local _M = {
-  _VERSION        = "0.6",
+  _VERSION        = "0.7.2",
   _COPYRIGHT      = core.copyright(),
+  config          = config,
   loadcertificate = x509.load,
   newcontext      = newcontext,
   wrap            = wrap,

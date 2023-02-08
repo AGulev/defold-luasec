@@ -1,7 +1,7 @@
 /*--------------------------------------------------------------------------
- * LuaSec 0.6
+ * LuaSec 0.7.2
  *
- * Copyright (C) 2014-2016 Kim Alvefur, Paul Aurich, Tobias Markmann
+ * Copyright (C) 2014-2019 Kim Alvefur, Paul Aurich, Tobias Markmann
  *                         Matthew Wild, Bruno Silvestre.
  *
  *--------------------------------------------------------------------------*/
@@ -10,8 +10,8 @@
 #include <string.h>
 
 #if defined(WIN32)
-#include <WS2tcpip.h>
-//#include <Windows.h>
+#include <ws2tcpip.h>
+//#include <windows.h>
 #else
 #include <sys/types.h>
 #include <sys/socket.h>
@@ -19,13 +19,13 @@
 #include <arpa/inet.h>
 #endif
 
-#include "openssl/ssl.h"
-#include "openssl/x509v3.h"
-#include "openssl/evp.h"
-#include "openssl/err.h"
-#include "openssl/asn1.h"
-#include "openssl/bio.h"
-#include "openssl/bn.h"
+#include <openssl/ssl.h>
+#include <openssl/x509v3.h>
+#include <openssl/evp.h>
+#include <openssl/err.h>
+#include <openssl/asn1.h>
+#include <openssl/bio.h>
+#include <openssl/bn.h>
 
 //#include <lua.h>
 //#include <lauxlib.h>
@@ -372,7 +372,9 @@ int meth_extensions(lua_State* L)
         /* not supported */
         break;
       }
+      GENERAL_NAME_free(general_name);
     }
+    sk_GENERAL_NAME_free(values);
     lua_pop(L, 1); /* ret[oid] */
     i++;           /* Next extension */
   }
@@ -715,12 +717,12 @@ LSEC_API int luaopen_ssl_x509(lua_State *L)
 {
   /* Register the functions and tables */
   luaL_newmetatable(L, "SSL:Certificate");
-  setfuncs(L, NULL, meta);
+  setfuncs(L, meta);
 
-  luaL_newlib(L, NULL, methods);
+  luaL_newlib(L, methods);
   lua_setfield(L, -2, "__index");
 
-  luaL_newlib(L, MODULE_NAME".ssl.x509", funcs);
+  luaL_newlib(L, funcs);
 
   return 1;
 }
